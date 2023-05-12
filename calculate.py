@@ -1,6 +1,9 @@
 import matplotlib.pyplot as plt
 import math
 import numpy as np
+import time
+import random
+
 # drag constants
 p = 1.293
 Cd = .4
@@ -11,24 +14,35 @@ m = .270
 # magnus constants
 Cl = 0.220  # lift constant
 
-# launch constants
-Vxi = 5
-Vyi = 5
-Vzi = 1
-w = 1
 
-# used vars
-Vx = Vxi
-Vy = Vyi
-Vz = Vzi
+def set_axes_equal(ax):
+    '''Make axes of 3D plot have equal scale so that spheres appear as spheres,
+    cubes as cubes, etc..  This is one possible solution to Matplotlib's
+    ax.set_aspect('equal') and ax.axis('equal') not working for 3D.
 
-x0 = [0]
-y0 = [0]
-z0 = [0]
+    Input
+      ax: a matplotlib axis, e.g., as output from plt.gca().
+    '''
 
-x1 = [0]
-y1 = [0]
-z1 = [0]
+    x_limits = ax.get_xlim3d()
+    y_limits = ax.get_ylim3d()
+    z_limits = ax.get_zlim3d()
+
+    x_range = abs(x_limits[1] - x_limits[0])
+    x_middle = np.mean(x_limits)
+    y_range = abs(y_limits[1] - y_limits[0])
+    y_middle = np.mean(y_limits)
+    z_range = abs(z_limits[1] - z_limits[0])
+    z_middle = np.mean(z_limits)
+
+    # The plot bounding box is a sphere in the sense of the infinity
+    # norm, hence I call half the max range the plot radius.
+    plot_radius = 0.5*max([x_range, y_range, z_range])
+
+    ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
+    ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
+    ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+
 
 def cross(a, b):
     """Takes cross product of two vectors and returns a unit vector"""
@@ -69,93 +83,186 @@ def get_magnus(v, wv, wa):
     return [S * x for x in am]
 
 
-# current position for drag
-x = 0
-y = 0
-z = 0
 
-drag_done = False
-vac_done = False
-
-dt = .001
-t = 0
-print("Starting... ")
-while True:
-    # magnus and drag effect numerical integration TODO use better integration method
+def get_acc(Vx, Vy, Vz, w, unit_direction):
     # x,y,z
-    am = get_magnus([Vz, Vy, Vx], 4000, [1, 1, 0])  # [1,0,0])
+    am = get_magnus([Vz, Vy, Vx], w, unit_direction)  # [1,0,0])
 
     ax = get_drag(Vx) + am[2]
     ay = get_drag(Vy) - 9.81 + am[1]
     az = get_drag(Vz) + am[0]
+    return [ax, ay, az]
 
-    Vxold = Vx
-    Vyold = Vy
-    Vzold = Vz
 
-    Vx += ax * dt
-    Vy += ay * dt
-    Vz += az * dt
+def rungekutta_step(f, Vx, Vy, Vz, dt, w, unit_direction):
+    """Take as input current velocities"""
+    start_val = np.array([Vx, Vy, Vz])
 
-    x += dt * (Vxold + Vx) / 2 # i like trapez
-    y += dt * (Vyold + Vy) / 2
-    z += dt * (Vzold + Vz) / 2
+    k1 = dt * np.array(f(Vx, Vy, Vz, w, unit_direction))
+    
+    a,b,c = start_val + k1/2
+    k2 = dt * np.array(f(a,b,c, w, unit_direction))
+    
+    a,b,c = start_val + k2 / 2
+    k3 = dt * np.array(f(a,b,c, w, unit_direction))
+    
+    a,b,c = start_val + k3
+    k4 = dt * np.array(f(a,b,c, w, unit_direction))
+    final = start_val + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+    
+    return final
 
-    if y0[-1] < 0 and not drag_done:
-        print(f"Ball with drag lands at: {round(t * dt,3)} s")
-        drag_done = True
-    if not drag_done:
-        x0.append(x)
-        y0.append(y)
-        z0.append(z)
 
-    if y1[-1] < 0 and not vac_done:
-        print(f"Ball without drag lands at: {round(t * dt,3)} s")
-        vac_done = True
+def velocity_step(f, Vx, Vy, Vz, dt, w, unit_direction):
+    """Take as input current velocities"""
+    start_val = np.array([Vx, Vy, Vz])
 
-    if not vac_done:
-        # vacuum
-        x1.append(Vxi * dt * t)
-        y1.append(Vyi * dt * t - .5 * 9.8 * (dt*t)**2)
-        z1.append(Vzi * dt * t)
+    k1 = dt * np.array(f(Vx, Vy, Vz, w, unit_direction))
+    
+    a,b,c = start_val + k1/2
+    k2 = dt * np.array(f(a,b,c, w, unit_direction))
+    
+    a,b,c = start_val + k2 / 2
+    k3 = dt * np.array(f(a,b,c, w, unit_direction))
+    
+    a,b,c = start_val + k3
+    k4 = dt * np.array(f(a,b,c, w, unit_direction))
+    final = start_val + (k1 + 2 * k2 + 2 * k3 + k4) / 6
+    
+    return final
 
-    if y1[-1] < 0 and y0[-1] < 0:
-        break
 
-    t += 1
+def calc(Vx, Vy, Vz, w, unit_direction, runge=False):
+    Vx, Vy, Vz, w = Vx + .00000001, Vy + .00000001, Vz + .00000001, w + .00000001
+    x0 = [0]
+    y0 = [0]
+    z0 = [0]
 
-def set_axes_equal(ax):
-    '''Make axes of 3D plot have equal scale so that spheres appear as spheres,
-    cubes as cubes, etc..  This is one possible solution to Matplotlib's
-    ax.set_aspect('equal') and ax.axis('equal') not working for 3D.
+    # current position for drag
+    x = 0
+    y = 0
+    z = 0
 
-    Input
-      ax: a matplotlib axis, e.g., as output from plt.gca().
-    '''
+    drag_done = False
 
-    x_limits = ax.get_xlim3d()
-    y_limits = ax.get_ylim3d()
-    z_limits = ax.get_zlim3d()
+    dt = .1
+    t = 0
+    while True:
 
-    x_range = abs(x_limits[1] - x_limits[0])
-    x_middle = np.mean(x_limits)
-    y_range = abs(y_limits[1] - y_limits[0])
-    y_middle = np.mean(y_limits)
-    z_range = abs(z_limits[1] - z_limits[0])
-    z_middle = np.mean(z_limits)
+        Vxold = Vx
+        Vyold = Vy
+        Vzold = Vz
 
-    # The plot bounding box is a sphere in the sense of the infinity
-    # norm, hence I call half the max range the plot radius.
-    plot_radius = 0.5*max([x_range, y_range, z_range])
+        if runge:
+            dt = .2
+            Vx, Vy, Vz = rungekutta_step(get_acc, Vx, Vy, Vz, dt, w, unit_direction)
+        
+        else:
+            ax,ay,az = get_acc(Vx, Vy, Vz, w, unit_direction)
 
-    ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
-    ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
-    ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+            Vx += ax * dt
+            Vy += ay * dt
+            Vz += az * dt
+    
 
+
+        #print(np.array([tx,ty,tz]) - np.array([Vx, Vy, Vz]))
+
+        x += dt * (Vxold + Vx) / 2 # i like trapez
+        y += dt * (Vyold + Vy) / 2
+        z += dt * (Vzold + Vz) / 2
+
+        
+        # check target
+        # z0 depth, y0 height, x0 horizontal
+        """  if z0[-1] > 5:
+            if y0[-1] > 2 and y0[-1] < 2.5 and x0[-1] > -.5 and x0[-1] < .5:
+                return [x0, y0, z0]
+
+            break"""
+        
+
+
+        if y0[-1] < 0 and not drag_done:
+            #print(f"Ball with drag lands at: {round(t * dt,3)} s")
+            return [x0, y0, z0]
+            break
+
+        if not drag_done:
+            x0.append(x)
+            y0.append(y)
+            z0.append(z)
+
+        t += 1
+
+    return [0,0,0]
 
 ax = plt.axes(projection ='3d')
-ax.plot3D(x0, z0, y0, 'red')
-ax.plot3D(x1, z1, y1, 'blue')
+
+"""
+perms = [
+        [0,0,1],
+        [0,1,0],
+        [0,1,1],
+        [1,0,0],
+        [1,0,1],
+        [1,1,1],    
+]
+# omni source
+for x in range(-20, 20, 2):
+    y = 5
+    for z in range(-20, 20, 2):
+        for j in range(-5,5):
+            for perm in perms:
+                x0, y0, z0 = calc(x, y, z, j * 400, perm)
+                if x0 + y0 + z0 != 0:
+                    ax.plot3D(x0, z0, y0, 'blue')
+
+    print(x)
+"""
+
+
+
+"""for i in range(-2,3):
+    for j in range(-2,3):
+        for k in range(-2,3):
+            mag = [i+.00000001,j+.00000001,k+.00000001]
+            x0, y0, z0 = calc(10,10,0, 100, mag, False)
+            if x0 + y0 + z0 != 0:
+                ax.plot3D(x0, z0, y0, 'blue')
+
+for i in range(-2,3):
+    for j in range(-2,3):
+        for k in range(-2,3):
+            mag = [i+.00000001,j+.00000001,k+.00000001]
+            x0, y0, z0 = calc(10,10,0, 100, mag, True)
+            if x0 + y0 + z0 != 0:
+                ax.plot3D(x0, z0, y0, 'red')
+
+    print(i)
+"""
+
+ground_truth = np.array([14.361254594177511, -3.675186128917694e-05, 2.862851170238706])
+
+s = time.time()
+x0, y0, z0 = calc(10,10,0, 1000, [0,0,1], False)
+if x0 + y0 + z0 != 0:
+    ax.plot3D(x0, z0, y0, 'blue')
+
+e = time.time() - s
+print(f"Error : {sum([abs(x) for x in ground_truth - np.array([x0[-1],y0[-1],z0[-1]])])}")
+print(f"Trapezoidal method, t = {e}")
+
+
+s = time.time()
+x0, y0, z0 = calc(10,10,0, 1000, [0,0,1], True)
+if x0 + y0 + z0 != 0:
+    ax.plot3D(x0, z0, y0, 'red')
+
+e = time.time() - s
+print(f"Error : {sum([abs(x) for x in ground_truth - np.array([x0[-1],y0[-1],z0[-1]])])}")
+print(f"Runge Kutta method, t = {e}")
+
 
 set_axes_equal(ax)
 plt.show()
